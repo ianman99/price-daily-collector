@@ -1,0 +1,6 @@
+# __pycache__
+__pycache__/
+.claude
+.env
+# old 폴더 제외
+old/
