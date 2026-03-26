@@ -90,13 +90,14 @@ def collect_corp_stcode_data():
     df = pd.DataFrame(json_data['OutBlock_1'])
     
     # 필요한 컬럼만 남기기
-    df = df[['ISU_CD', 'ISU_SRT_CD']]
+    df = df[['ISU_CD', 'ISU_SRT_CD', 'LIST_DD']]
     df.rename(columns={
         'ISU_CD': 'st_code',
         'ISU_SRT_CD': 'code',
+        'LIST_DD': 'list_dt',
     }, inplace=True)
     df['code'] = 'A' + df['code']
-    column_order = ['st_code', 'code']
+    column_order = ['st_code', 'code', 'list_dt']
     df = df[column_order]
 
     return df
