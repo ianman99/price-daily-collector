@@ -1,8 +1,9 @@
 import requests as rq
 from io import BytesIO
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
 from sqlalchemy import create_engine, text
+import exchange_calendars as xcals
 import os
 from dotenv import load_dotenv
 from login_krx import get_krx_session
@@ -60,7 +61,10 @@ def collect_krx_index_data(type_num, date_str):
 
 def main():
     list = ['02', '03']
-    date_list = [(date.today() - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)]
+    today = date.today()
+    krx = xcals.get_calendar("XKRX")
+    prev_trading_day = krx.previous_session(pd.Timestamp(today)).strftime("%Y%m%d")
+    date_list = [prev_trading_day, today.strftime("%Y%m%d")]
     for date_str in date_list:
         for i in list:
             df = collect_krx_index_data(i, date_str)

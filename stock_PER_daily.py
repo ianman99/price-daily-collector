@@ -2,6 +2,7 @@ import requests as rq
 import pandas as pd
 from datetime import date
 from sqlalchemy import create_engine, text
+import exchange_calendars as xcals
 import os
 from dotenv import load_dotenv
 from login_krx import get_krx_session
@@ -175,19 +176,21 @@ def upsert_data(df: pd.DataFrame) -> None:
         print(f"Upsert completed. Affected rows: {result.rowcount}")
 
 def main():
-    today_date = date.today().strftime("%Y%m%d")
-    
-    print(f"Starting data collection for {today_date}")
-    
-    # 오늘 날짜 데이터 수집
-    df = collect_krx_stock_data_per(today_date)
-    
-    # 데이터 업서트
-    if not df.empty:
-        upsert_data(df)
-        print("데이터가 성공적으로 저장되었습니다.")
-    else:
-        print("수집된 데이터가 없습니다.")
+    today = date.today()
+    krx = xcals.get_calendar("XKRX")
+    prev_trading_day = krx.previous_session(pd.Timestamp(today)).strftime("%Y%m%d")
+    date_list = [prev_trading_day, today.strftime("%Y%m%d")]
+
+    for date_str in date_list:
+        print(f"Starting data collection for {date_str}")
+
+        df = collect_krx_stock_data_per(date_str)
+
+        if not df.empty:
+            upsert_data(df)
+            print(f"{date_str} 데이터가 성공적으로 저장되었습니다.")
+        else:
+            print(f"{date_str} 수집된 데이터가 없습니다.")
 
 if __name__ == '__main__':
     main()
