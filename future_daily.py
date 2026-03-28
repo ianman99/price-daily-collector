@@ -1,7 +1,8 @@
 import requests as rq
 import pandas as pd
-from datetime import date
-from sqlalchemy import create_engine
+from datetime import date, timedelta
+from sqlalchemy import create_engine, text
+import exchange_calendars as xcals
 import os
 from dotenv import load_dotenv
 from login_krx import get_krx_session
@@ -20,27 +21,23 @@ engine = create_engine(db_url)
 # KRX 세션 가져오기
 krx_session = get_krx_session()
 
-def collect_krx_index_future_data(code):
-    today_date = date.today().strftime("%Y%m%d")
+def collect_krx_index_future_data(code, aggBasTpCd='0'):
+    today = date.today()
+    strtDd = (today - timedelta(days=7)).strftime("%Y%m%d")
+    endDd = (today + timedelta(days=7)).strftime("%Y%m%d")
     url = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
     headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'http://data.krx.co.kr',
-        'Referer': 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201050103',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Cookie': f"JSESSIONID={krx_session}"
+        'Referer': 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+        'User-Agent': 'Mozilla/5.0',
+        'Cookie': f'JSESSIONID={krx_session}',
     }
     data = {
         'bld': 'dbms/MDC/STAT/standard/MDCSTAT12701',
         'locale': 'ko_KR',
         'prodId': code,
-        'strtDd': today_date,
-        'endDd': today_date,
-        'aggBasTpCd': '0',
+        'strtDd': strtDd,
+        'endDd': endDd,
+        'aggBasTpCd': aggBasTpCd,
         'share': '1',
         'money': '3',
         'csvxls_isNo': 'false',
@@ -50,15 +47,31 @@ def collect_krx_index_future_data(code):
     json_data = response.json()
     df = pd.DataFrame(json_data['output'])
 
-    # 공백 및 (주간) 제거
+    # 공백 및 (주간)/(야간) 제거
     df['TRD_DD'] = df['TRD_DD'].str.replace(' ', '')
     df['TRD_DD'] = df['TRD_DD'].str.replace('(주간)', '')
+    df['TRD_DD'] = df['TRD_DD'].str.replace('(야간)', '')
+
+    # 야간선물: T+1 영업일 → T일로 변환 (KRX 캘린더 기준)
+    if aggBasTpCd == '2':
+        krx = xcals.get_calendar("XKRX")
+        df['TRD_DD'] = df['TRD_DD'].apply(
+            lambda x: krx.previous_session(pd.Timestamp(x)).strftime('%Y/%m/%d')
+        )
     df['ISU_NM'] = df['ISU_NM'].str.replace(' ', '')
-    
-    # code와 maturity 분리
+
+    # 만약 ISU_NM에 '선물'이 포함되어 있으면 'KOSPI 200 선물' 을 '코스피200 F' 로 변경
+    df['ISU_NM'] = df['ISU_NM'].str.replace('선물', 'F')
+    df['ISU_NM'] = df['ISU_NM'].str.replace('KOSPI', '코스피')
+
+    # code, maturity 분리
     df[['code', 'maturity']] = df['ISU_NM'].str.split('F', expand=True)
-    df['code'] = df['code'] + 'F'  # code에 'F' 추가
-    df['maturity'] = df['maturity'].str[:4] + '-' + df['maturity'].str[4:6]
+    df['code'] = df['code'] + 'F'
+    if aggBasTpCd == '2':
+        df['code'] = df['code'] + 'N'
+    df['maturity'] = df['maturity'].apply(
+        lambda x: x[:4] + '-' + x[4:6] if not pd.isna(x) else x
+    )
 
     # 컬럼명 매핑
     df.rename(columns={
@@ -85,17 +98,56 @@ def collect_krx_index_future_data(code):
     for col in num_cols:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
 
-    column_order = ['date', 'code', 'open', 'high', 'low', 'close', 
+    column_order = ['date', 'code', 'open', 'high', 'low', 'close',
                     'volume', 'trading_value', 'maturity', 'unsettled']
     df = df[column_order]
 
     return df
 
-# print(collect_krx_index_future_data('KR___FUK2I', '20250101', '20250613')) 
-# print(collect_krx_index_future_data('KR___FUKQI', '20250101', '20250613')) 
+def upsert_index_future_daily(df, engine):
+    if df.empty:
+        return
+    with engine.connect() as conn:
+        for _, row in df.iterrows():
+            date_value = row['date']
+            code = row['code']
+            open_ = None if pd.isna(row['open']) else row['open']
+            high = None if pd.isna(row['high']) else row['high']
+            low = None if pd.isna(row['low']) else row['low']
+            close = None if pd.isna(row['close']) else row['close']
+            volume = None if pd.isna(row['volume']) else row['volume']
+            trading_value = None if pd.isna(row['trading_value']) else row['trading_value']
+            maturity = None if pd.isna(row['maturity']) else row['maturity']
+            unsettled = None if pd.isna(row['unsettled']) else row['unsettled']
+            insert_query = text("""
+            INSERT INTO index_future_daily (date, code, open, high, low, close, volume, trading_value, maturity, unsettled)
+            VALUES (:date, :code, :open, :high, :low, :close, :volume, :trading_value, :maturity, :unsettled)
+            ON DUPLICATE KEY UPDATE
+                open = VALUES(open),
+                high = VALUES(high),
+                low = VALUES(low),
+                close = VALUES(close),
+                volume = VALUES(volume),
+                trading_value = VALUES(trading_value),
+                maturity = VALUES(maturity),
+                unsettled = VALUES(unsettled)
+            """)
+            conn.execute(insert_query, {
+                'date': date_value, 'code': code, 'open': open_, 'high': high, 'low': low, 'close': close,
+                'volume': volume, 'trading_value': trading_value, 'maturity': maturity, 'unsettled': unsettled
+            })
+        conn.commit()
 
+# 주간선물
 df_1 = collect_krx_index_future_data('KR___FUK2I')
-df_1.to_sql(name='index_future_daily', con=engine, if_exists='append', index=False)
+upsert_index_future_daily(df_1, engine)
 
 df_2 = collect_krx_index_future_data('KR___FUKQI')
-df_2.to_sql(name='index_future_daily', con=engine, if_exists='append', index=False)
+upsert_index_future_daily(df_2, engine)
+
+# 야간선물
+df_3 = collect_krx_index_future_data('KR___FUK2I', '2')
+upsert_index_future_daily(df_3, engine)
+
+df_4 = collect_krx_index_future_data('KR___FUKQI', '2')
+upsert_index_future_daily(df_4, engine)
