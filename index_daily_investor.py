@@ -3,6 +3,7 @@ from io import BytesIO
 import pandas as pd
 from datetime import date, timedelta
 from sqlalchemy import create_engine, text
+import exchange_calendars as xcals
 import time
 import os
 from dotenv import load_dotenv
@@ -22,8 +23,7 @@ engine = create_engine(db_url)
 # KRX 세션 가져오기
 krx_session = get_krx_session()
 
-def collect_krx_index_data():
-    today_date = date.today().strftime("%Y%m%d")
+def collect_krx_index_data(today_date):
     url = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
     params = {
         'bld': 'dbms/MDC/STAT/standard/MDCSTAT02202',
@@ -189,15 +189,20 @@ def collect_krx_index_data():
     return df
 
 def main():
-    try:
-        with engine.begin() as connection:
-            df = collect_krx_index_data()
-            df.to_sql(name='index_daily_investor', con=connection, if_exists='append', index=False)
-            
-        print("데이터가 성공적으로 저장되었습니다.")
-    except Exception as e:
-        print(f"오류가 발생했습니다: {str(e)}")
-        raise
+    today = date.today()
+    krx = xcals.get_calendar("XKRX")
+    prev_trading_day = krx.previous_session(pd.Timestamp(today)).strftime("%Y%m%d")
+    date_list = [prev_trading_day, today.strftime("%Y%m%d")]
+
+    for date_str in date_list:
+        print(f"{date_str} 처리 시작")
+        try:
+            df = collect_krx_index_data(date_str)
+            with engine.begin() as connection:
+                df.to_sql(name='index_daily_investor', con=connection, if_exists='append', index=False)
+            print(f"{date_str} 저장 완료")
+        except Exception as e:
+            print(f"{date_str} 오류: {str(e)}")
     
 main()
     

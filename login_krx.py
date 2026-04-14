@@ -27,6 +27,10 @@ def get_krx_session():
     # 3. 로그인 시도
     login_url = 'https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd'
     login_data = {
+        'mbrNm': '',
+        'telNo': '',
+        'di': '',
+        'certType': '',
         'mbrId': KRX_ID,
         'pw': KRX_PW
     }
@@ -37,6 +41,8 @@ def get_krx_session():
     
     # 실제 로그인 POST 요청
     login_response = session.post(login_url, data=login_data, headers=headers)
+
+    print(f"로그인 상태코드: {login_response.status_code}, 응답: {str(login_response.json())[:1000]}")
     
     JSESSIONID = session.cookies.get_dict()['JSESSIONID']
     

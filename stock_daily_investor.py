@@ -1,7 +1,8 @@
 import requests
 from login_krx import get_krx_session
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 import pandas as pd
+import exchange_calendars as xcals
 import time
 import os
 from dotenv import load_dotenv
@@ -18,17 +19,11 @@ engine = create_engine(db_url)
 
 krx_session = get_krx_session()
 
-# 날짜 범위 생성 (주말 제외)
-KST = timezone(timedelta(hours=9))
-today_kst = datetime.now(KST)
-start_date = today_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-end_date = start_date
-target_dates = []
-d = start_date
-while d <= end_date:
-    if d.weekday() < 5:  # 월~금만
-        target_dates.append(d.strftime("%Y%m%d"))
-    d += timedelta(days=1)
+# 날짜 범위 생성 (전 거래일 + 오늘)
+today = date.today()
+krx = xcals.get_calendar("XKRX")
+prev_trading_day = krx.previous_session(pd.Timestamp(today)).strftime("%Y%m%d")
+target_dates = [prev_trading_day, today.strftime("%Y%m%d")]
 
 print(f"처리 대상: {len(target_dates)}일 (주말 제외)")
 
