@@ -2,6 +2,7 @@ import requests
 from login_krx import get_krx_session
 import pandas as pd
 import time
+import sys
 import os
 from datetime import date
 from dotenv import load_dotenv
@@ -25,6 +26,9 @@ headers = {
     "Cookie": f"JSESSIONID={krx_session}",
 }
 
+class KRXBlocked(Exception):
+    """KRX가 자동화 대량조회로 판단해 IP 접속을 제한한 상태"""
+
 def get_etf_investor_trend(isu_cd, strt_dd, end_dd):
     resp = requests.post(
         "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd",
@@ -42,6 +46,9 @@ def get_etf_investor_trend(isu_cd, strt_dd, end_dd):
             "csvxls_isNo": "false",
         },
     )
+    # 차단 시 KRX는 HTTP 200에 HTML 에러페이지를 반환하므로 본문으로 판별
+    if not resp.text.lstrip().startswith('{'):
+        raise KRXBlocked(f"KRX 접속 제한 감지 (응답 {len(resp.text)}바이트 HTML)")
     output = resp.json().get('output', [])
     if output:
         return pd.DataFrame(output)
@@ -93,6 +100,8 @@ upsert_sql = text("""
 
 total = len(isu_cd_map)
 items = list(isu_cd_map.items())
+done = 0
+blocked = False
 
 for i, (isu_cd, srt_cd) in enumerate(items, 1):
     code = 'A' + srt_cd
@@ -117,8 +126,18 @@ for i, (isu_cd, srt_cd) in enumerate(items, 1):
         with engine.begin() as conn:
             conn.execute(upsert_sql, rows)
         print(f"[{i}/{total}] {code} → {len(rows)}건 업서트 완료")
+        done += 1
+    except KRXBlocked as e:
+        print(f"[{i}/{total}] {code} → {e}")
+        print(f"차단 감지로 중단합니다. (성공 {done}종목 / 전체 {total}종목)")
+        blocked = True
+        break
     except Exception as e:
         print(f"[{i}/{total}] {code} 오류: {str(e)}")
     time.sleep(1.0)
+
+if blocked:
+    print(f"\n미완료 종료: {done}/{total}종목만 처리됨")
+    sys.exit(1)
 
 print(f"\n전체 완료! ({total}종목)")
