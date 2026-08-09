@@ -1,5 +1,4 @@
 import requests as rq
-from io import BytesIO
 import pandas as pd
 from datetime import date
 from sqlalchemy import create_engine, text
@@ -22,42 +21,65 @@ engine = create_engine(db_url)
 # KRX 세션 가져오기
 krx_session = get_krx_session()
 
-def collect_krx_index_data(type_num, date_str):
-    gen_otp_url = 'http://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd'
-    gen_otp_stk = {
+def collect_krx_index_data(type_num: str, date_str: str) -> pd.DataFrame:
+    """단일 날짜의 KRX 지수 PER 데이터 수집"""
+    url = 'https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
+    params = {
+        'bld': 'dbms/MDC/STAT/standard/MDCSTAT00701',
         'locale': 'ko_KR',
         'searchType': 'A',
         'idxIndMidclssCd': type_num,
         'trdDd': date_str,
-        'param1indTpCd_finder_equidx0_5': '',
-        'csvxls_isNo': 'false',
-        'name': 'fileDown',
-        'url': 'dbms/MDC/STAT/standard/MDCSTAT00701'
+        'csvxls_isNo': 'false'
     }
-    headers = {'Referer': 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd', "User-Agent": "Mozilla/5.0", "Cookie": f"JSESSIONID={krx_session}"}
-    otp_stk = rq.post(gen_otp_url, gen_otp_stk, headers=headers).text
-    down_url = 'http://data.krx.co.kr/comm/fileDn/download_csv/download.cmd'
-    down_sector_stk = rq.post(down_url, {'code': otp_stk}, headers=headers)
-    df = pd.read_csv(BytesIO(down_sector_stk.content), encoding='EUC-KR')
-    
-    # 지수명 공백 제거
-    df['지수명'] = df['지수명'].str.replace(' ', '')
-    # 지수명이 코스피, 코스피200, 코스닥, 코스닥150 인 행을 제외하고 나머지 행 삭제
-    df = df[df['지수명'].isin(['코스피', '코스피200', '코스닥', '코스닥150'])]
-    
-    # 지수명, PER, PBR, 배당수익률 컬럼만 남기기
-    df = df[['지수명', 'PER', 'PBR', '배당수익률']]
-    df['date'] = date_str
-    df.rename(columns={
-        '지수명': 'code',
-        'PER': 'PER',
-        'PBR': 'PBR',
-        '배당수익률': 'dividend_yield'
-    }, inplace=True)
-    # PER 이 0 인 행 삭제
-    df= df[df['PER'] != 0]
-    
-    return df
+    headers = {
+        'Referer': 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201010107',
+        'User-Agent': 'Mozilla/5.0',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': f"JSESSIONID={krx_session}"
+    }
+
+    try:
+        response = rq.post(url, data=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data.get('output'):
+            print(f"No data for date: {date_str} (type {type_num})")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data['output'])
+        if df.empty:
+            return df
+
+        df = df[['IDX_NM', 'WT_PER', 'WT_STKPRC_NETASST_RTO', 'DIV_YD']]
+        df = df.rename(columns={
+            'IDX_NM': 'code',
+            'WT_PER': 'PER',
+            'WT_STKPRC_NETASST_RTO': 'PBR',
+            'DIV_YD': 'dividend_yield'
+        })
+
+        # 지수명 공백 제거
+        df['code'] = df['code'].str.replace(' ', '')
+        # 지수명이 코스피, 코스피200, 코스닥, 코스닥150 인 행을 제외하고 나머지 행 삭제
+        df = df[df['code'].isin(['코스피', '코스피200', '코스닥', '코스닥150'])].copy()
+
+        df['date'] = date_str
+
+        # 쉼표 제거 후 데이터 타입 최적화
+        for col in ['PER', 'PBR', 'dividend_yield']:
+            df[col] = pd.to_numeric(df[col].str.replace(',', ''), errors='coerce')
+
+        # PER 이 0 인 행 삭제
+        df = df[df['PER'] != 0]
+
+        print(f"Collected {len(df)} records for {date_str} (type {type_num})")
+        return df[['date', 'code', 'PER', 'PBR', 'dividend_yield']]
+
+    except Exception as e:
+        print(f"Error collecting data for {date_str} (type {type_num}): {e}")
+        return pd.DataFrame()
 
 def main():
     list = ['02', '03']
@@ -68,6 +90,8 @@ def main():
     for date_str in date_list:
         for i in list:
             df = collect_krx_index_data(i, date_str)
+            if df.empty:
+                continue
             with engine.connect() as conn:
                 for _, row in df.iterrows():
                     date_value = row['date']
