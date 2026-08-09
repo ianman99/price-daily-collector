@@ -99,7 +99,7 @@ for i, (isu_cd, srt_cd) in enumerate(items, 1):
     try:
         df = get_etf_investor_trend(isu_cd, today_date, today_date)
         if df.empty:
-            time.sleep(0.3)
+            time.sleep(1.0)
             continue
 
         rows = []
@@ -119,6 +119,6 @@ for i, (isu_cd, srt_cd) in enumerate(items, 1):
         print(f"[{i}/{total}] {code} → {len(rows)}건 업서트 완료")
     except Exception as e:
         print(f"[{i}/{total}] {code} 오류: {str(e)}")
-    time.sleep(0.3)
+    time.sleep(1.0)
 
 print(f"\n전체 완료! ({total}종목)")

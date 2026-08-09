@@ -7,7 +7,6 @@ import time
 import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 DB_USER = os.getenv('DB_USER')
@@ -69,20 +68,18 @@ for i, today_date in enumerate(target_dates, 1):
     df_inst = get_investor_data('7050', today_date)
     if df_inst.empty:
         print(f"{today_date} 휴장일 → 스킵")
-        time.sleep(0.3)
+        time.sleep(1.0)
         continue
 
-    # 나머지 4개 카테고리 병렬 호출
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        f_corp = executor.submit(get_investor_data, '7100', today_date)
-        f_retail = executor.submit(get_investor_data, '8000', today_date)
-        f_foreign = executor.submit(get_investor_data, '9000', today_date)
-        f_foreign_other = executor.submit(get_investor_data, '9001', today_date)
-
-        df_corp = f_corp.result()
-        df_retail = f_retail.result()
-        df_foreign = f_foreign.result()
-        df_foreign_other = f_foreign_other.result()
+    # 나머지 4개 카테고리 순차 호출 (KRX 자동화 대량조회 탐지 회피)
+    time.sleep(1.0)
+    df_corp = get_investor_data('7100', today_date)
+    time.sleep(1.0)
+    df_retail = get_investor_data('8000', today_date)
+    time.sleep(1.0)
+    df_foreign = get_investor_data('9000', today_date)
+    time.sleep(1.0)
+    df_foreign_other = get_investor_data('9001', today_date)
 
     df_foreign_total = pd.concat([df_foreign, df_foreign_other]).groupby('code')['net_buy'].sum().reset_index()
 
@@ -103,6 +100,6 @@ for i, today_date in enumerate(target_dates, 1):
             conn.execute(query, params)
 
     print(f"{today_date} 완료")
-    time.sleep(0.5)
+    time.sleep(1.0)
 
 print("\n전체 완료!")
